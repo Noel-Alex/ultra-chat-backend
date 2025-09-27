@@ -1,117 +1,240 @@
 {
   "info": {
-    "name": "Ultra Chat API",
-    "description": "API endpoints for Ultra Chat application",
-    "_postman_id": "6f3a9f72-235b-49b5-9a1c-660f8e8a34c7",
+    "_postman_id": "c1a2b3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "name": "Ultra-Chat-Backend API",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
     {
-      "name": "Create Summary",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\"content\": \"This is a sample summary\", \"server_id\": \"1234\", \"is_private\": true, \"user_id\": \"5678\"}"
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Login to Discord",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "login"
+              ]
+            },
+            "description": "Returns a URL to authorize the application with Discord. You must copy this URL and open it in a web browser."
+          },
+          "response": []
         },
-        "url": {
-          "raw": "http://localhost:5001/summaries",
-          "host": ["localhost"],
-          "port": "5001",
-          "path": ["summaries"]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Get Summaries",
-      "request": {
-        "method": "GET",
-        "header": [
-          {
-            "key": "ID",
-            "value": "5678"
-          }
-        ],
-        "url": {
-          "raw": "http://localhost:5001/summaries",
-          "host": ["localhost"],
-          "port": "5001",
-          "path": ["summaries"]
-        }
-      },
-      "response": []
-    },
-    {
-      "name": "Update Summary",
-      "request": {
-        "method": "PUT",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\"summary_id\": \"1234\", \"server_id\": \"5678\", \"is_private\": true, \"content\": \"Updated content\"}"
+        {
+          "name": "Callback (For Browser)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/callback?code=YOUR_DISCORD_CODE",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "callback"
+              ],
+              "query": [
+                {
+                  "key": "code",
+                  "value": "YOUR_DISCORD_CODE"
+                }
+              ]
+            },
+            "description": "This is the endpoint Discord redirects to. You typically don't call this directly in Postman. It's here for completeness."
+          },
+          "response": []
         },
-        "url": {
-          "raw": "http://localhost:5001/summaries",
-          "host": ["localhost"],
-          "port": "5001",
-          "path": ["summaries"]
+        {
+          "name": "Get User Profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/profile",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "profile"
+              ]
+            },
+            "description": "Fetches the user's Discord profile using a valid access token. You must manually get a token after the OAuth flow and set it in the `accessToken` variable."
+          },
+          "response": []
         }
-      },
-      "response": []
+      ]
     },
     {
-      "name": "Delete Summary",
-      "request": {
-        "method": "DELETE",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "body": {
-          "mode": "raw",
-          "raw": "{\"summary_id\": \"1234\"}"
+      "name": "Summaries",
+      "item": [
+        {
+          "name": "Create Summary",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"content\": \"This is a test summary from Postman.\",\n    \"server_id\": \"{{serverId}}\",\n    \"is_private\": false,\n    \"user_id\": \"{{userId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/create-summary",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "create-summary"
+              ]
+            },
+            "description": "Creates a new summary for a user. The response will contain the new `summary_id`."
+          },
+          "response": []
         },
-        "url": {
-          "raw": "http://localhost:5001/summaries",
-          "host": ["localhost"],
-          "port": "5001",
-          "path": ["summaries"]
+        {
+          "name": "Get All Summaries for User",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "ID",
+                "value": "{{userId}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/summarizer",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "summarizer"
+              ]
+            },
+            "description": "Retrieves all summaries associated with the user ID provided in the 'ID' header."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Summary",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "ID",
+                "value": "{{userId}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"summary_id\": \"{{summaryId}}\",\n    \"content\": \"This is the UPDATED summary content.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/update-summary",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "update-summary"
+              ]
+            },
+            "description": "Updates the content of a specific summary. You must provide the `summary_id` to identify which one to update."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Summary",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "ID",
+                "value": "{{userId}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"summary_id\": \"{{summaryId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/delete-summary",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "delete-summary"
+              ]
+            },
+            "description": "Deletes a specific summary. You must provide the correct `summary_id` in the body."
+          },
+          "response": []
         }
-      },
-      "response": []
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5001"
     },
     {
-      "name": "Is Authenticated",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Authorization",
-            "value": "Bearer your_access_token"
-          }
-        ],
-        "url": {
-          "raw": "http://localhost:5001/authenticate",
-          "host": ["localhost"],
-          "port": "5001",
-          "path": ["authenticate"]
-        }
-      },
-      "response": []
+      "key": "userId",
+      "value": "YOUR_DISCORD_USER_ID"
+    },
+    {
+      "key": "serverId",
+      "value": "YOUR_DISCORD_SERVER_ID"
+    },
+    {
+      "key": "summaryId",
+      "value": "A_SUMMARY_ID_FROM_CREATE_OR_GET_RESPONSE"
+    },
+    {
+      "key": "accessToken",
+      "value": "YOUR_DISCORD_ACCESS_TOKEN"
     }
   ]
 }

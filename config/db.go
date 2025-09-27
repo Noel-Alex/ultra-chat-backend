@@ -7,54 +7,51 @@ import (
 	"os"
 	"time"
 
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	// ADDED: AWS SDK v2 imports for configuration and DynamoDB service.
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	// REMOVED: MongoDB driver imports are no longer needed.
+	// "go.mongodb.org/mongo-driver/mongo"
+	// "go.mongodb.org/mongo-driver/mongo/options"
 )
 
-var db *mongo.Database
-var mongoClient *mongo.Client
-
-func ConnectDB() *mongo.Database {
-	uri := os.Getenv("MONGO_URI")
-	fmt.Println("MongoDB URI:", uri)
-
-	if uri == "" {
-		log.Fatal("MONGO_URI not set in environment")
+// ConnectDB initializes and returns a new DynamoDB client.
+// The AWS SDK v2 will automatically look for credentials in the environment
+// (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY), shared credentials file (~/.aws/credentials),
+// or an IAM role if running on AWS infrastructure.
+func ConnectDB() *dynamodb.Client {
+	// CHANGED: We now look for AWS_REGION instead of MONGO_URI.
+	awsRegion := os.Getenv("AWS_REGION")
+	if awsRegion == "" {
+		log.Fatal("AWS_REGION not set in environment variable")
 	}
+	fmt.Println("AWS Region:", awsRegion)
 
-	clientOpts := options.Client().ApplyURI(uri).SetMaxPoolSize(100)
-	fmt.Println("Connecting to MongoDB...")
-
-	client, err := mongo.NewClient(clientOpts)
-	if err != nil {
-		log.Fatalf("Failed to create MongoDB client: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	if err := client.Connect(ctx); err != nil {
-		log.Fatalf("Failed to connect to MongoDB: %v", err)
+	fmt.Println("Loading AWS configuration...")
+	// The LoadDefaultConfig function is the standard way to load configuration.
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(awsRegion))
+	if err != nil {
+		log.Fatalf("Unable to load AWS SDK config: %v", err)
 	}
 
-	fmt.Println("Pinging MongoDB...")
-	if err := client.Ping(ctx, nil); err != nil {
-		log.Fatalf("Failed to ping MongoDB: %v", err)
+	// Create a new DynamoDB client from the loaded configuration.
+	client := dynamodb.NewFromConfig(cfg)
+
+	// Optional but recommended: Perform a simple, low-cost operation to verify
+	// that the credentials and region are correct. This is the equivalent of a "ping".
+	fmt.Println("Verifying connection to DynamoDB...")
+	_, err = client.ListTables(ctx, &dynamodb.ListTablesInput{})
+	if err != nil {
+		log.Fatalf("Failed to connect to DynamoDB. Check credentials and region. Error: %v", err)
 	}
 
-	fmt.Println("Connected to MongoDB successfully")
-	return client.Database("discord_oauth")
+	fmt.Println("Connected to DynamoDB successfully")
+	return client
 }
 
-// DisconnectDB gracefully disconnects MongoDB
-func DisconnectDB() {
-	if mongoClient != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := mongoClient.Disconnect(ctx); err != nil {
-			log.Println("Failed to disconnect MongoDB: ", err)
-		} else {
-			log.Println("Disconnected from MongoDB")
-		}
-	}
-}
+// REMOVED: The DisconnectDB function is not needed for the AWS SDK v2.
+// The SDK manages underlying HTTP connections in its connection pool and does not
+// maintain a persistent stateful connection that needs to be explicitly closed.

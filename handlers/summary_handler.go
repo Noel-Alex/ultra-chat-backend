@@ -4,19 +4,24 @@ import (
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
-	"go.mongodb.org/mongo-driver/bson"
+	"log"
+	// REMOVED: "go.mongodb.org/mongo-driver/bson" - No longer needed.
 	"net/http"
 	"time"
+	"ultra-chat-backend/models" // ADDED: To use the new SummaryItem model.
 	"ultra-chat-backend/repositories"
 	"ultra-chat-backend/utils"
 )
 
 type SummaryHandler struct {
-	repo *repositories.MongoSummaryRepository // Use pointer to MongoSummaryRepository
+	// CHANGED: We now depend on the interface, not the concrete implementation.
+	// This makes the handler completely decoupled from the database.
+	repo repositories.SummaryRepository
 }
 
-func NewSummaryHandler(summaryRepo *repositories.MongoSummaryRepository) *SummaryHandler {
-	return &SummaryHandler{repo: summaryRepo} // Initialize with summaryRepo
+// NewSummaryHandler now accepts the interface.
+func NewSummaryHandler(summaryRepo repositories.SummaryRepository) *SummaryHandler {
+	return &SummaryHandler{repo: summaryRepo}
 }
 
 func (h *SummaryHandler) CreateSummary(c echo.Context) error {
@@ -36,6 +41,7 @@ func (h *SummaryHandler) CreateSummary(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
 	}
 
+	// This method call remains the same as the interface was preserved.
 	exists, dbErr := h.repo.CheckUserExists(body.UserID)
 	if dbErr != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
@@ -45,10 +51,21 @@ func (h *SummaryHandler) CreateSummary(c echo.Context) error {
 	}
 
 	summaryID := uuid.New().String()
+	createdAt := time.Now().UTC().Format(time.RFC3339)
 
-	createdAt := time.Now().Format(time.RFC3339)
+	// CHANGED: We now construct a proper model struct instead of passing loose parameters.
+	// This is cleaner and safer.
+	newSummary := models.SummaryItem{
+		UserID:    body.UserID,
+		SummaryID: summaryID,
+		ServerID:  body.ServerID,
+		IsPrivate: body.IsPrivate,
+		Content:   body.Content,
+		CreatedAt: createdAt,
+		UpdatedAt: createdAt, // On creation, created_at and updated_at are the same.
+	}
 
-	err := h.repo.AddSummary(summaryID, body.UserID, body.ServerID, body.IsPrivate, body.Content, createdAt)
+	err := h.repo.AddSummary(newSummary)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to create summary"})
 	}
@@ -65,10 +82,16 @@ func (h *SummaryHandler) GetSummaries(c echo.Context) error {
 		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
 	}
 
-	filter := bson.M{"user_id": userID}
-	summaries, err := h.repo.GetSummaries(filter)
+	// CHANGED: Removed the bson.M filter and now call the specific method.
+	// This call directly translates to querying the DynamoDB table by its partition key.
+	summaries, err := h.repo.GetSummariesByUserID(userID)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to retrieve summaries"})
+	}
+
+	// If no summaries are found, return an empty list, not an error.
+	if summaries == nil {
+		summaries = []models.SummaryItem{}
 	}
 
 	return c.JSON(http.StatusOK, summaries)
@@ -77,8 +100,8 @@ func (h *SummaryHandler) GetSummaries(c echo.Context) error {
 func (h *SummaryHandler) UpdateSummary(c echo.Context) error {
 	type RequestBody struct {
 		SummaryID string `json:"summary_id"`
-		ServerID  string `json:"server_id"`
-		IsPrivate bool   `json:"is_private"`
+		ServerID  string `json:"server_id"`  // Kept in body for client consistency, but not used in the repo call
+		IsPrivate bool   `json:"is_private"` // Kept in body for client consistency, but not used in the repo call
 		Content   string `json:"content"`
 	}
 
@@ -92,12 +115,20 @@ func (h *SummaryHandler) UpdateSummary(c echo.Context) error {
 		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
 	}
 
-	if body.SummaryID == "" || body.ServerID == "" {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields"})
+	// The body must contain the specific summary_id to update.
+	if body.SummaryID == "" || body.Content == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing required fields: summary_id and content"})
 	}
 
-	err := h.repo.UpdateSummary(userID, body.ServerID, body.IsPrivate, body.Content)
+	// CHANGED: We now call the more precise UpdateSummaryContent method.
+	// This method directly updates a specific summary item using its full primary key,
+	// which is much more reliable than the old query.
+	err := h.repo.UpdateSummaryContent(userID, body.SummaryID, body.Content)
 	if err != nil {
+		// The repository now returns a specific error for "not found".
+		if err.Error() == "no matching summary found" {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
+		}
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to update summary"})
 	}
 
@@ -118,13 +149,20 @@ func (h *SummaryHandler) DeleteSummary(c echo.Context) error {
 		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
 	}
 
+	// <<< --- THIS IS THE CRITICAL DEBUG LINE --- >>>
+	log.Printf("Received delete request for UserID: '%s' with SummaryID from body: '%s'", userID, body.SummaryID)
+
 	if err := h.repo.DeleteSummary(userID, body.SummaryID); err != nil {
+		if err.Error() == "no matching summary found" {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": err.Error()})
+		}
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete summary"})
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{"message": "Summary deleted successfully"})
 }
 
+// This function does not interact with the repository, so it remains unchanged.
 func (h *SummaryHandler) IsAuthenticated(c echo.Context) error {
 	authHeader := c.Request().Header.Get("Authorization")
 	fmt.Println(authHeader)

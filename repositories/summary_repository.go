@@ -6,134 +6,209 @@ import (
 	"fmt"
 	"time"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"ultra-chat-backend/models"
 )
 
-// MongoSummaryRepository handles operations related to summaries and users
-type MongoSummaryRepository struct {
-	collection     *mongo.Collection
-	userCollection *mongo.Collection
+// SummaryRepository defines the interface for summary data operations.
+// Note the more specific function signatures compared to the generic bson.M.
+type SummaryRepository interface {
+	AddSummary(summary models.SummaryItem) error
+	GetSummariesByUserID(userID string) ([]models.SummaryItem, error)
+	GetSummariesByUserIDAndServerID(userID, serverID string) ([]models.SummaryItem, error)
+	UpdateSummaryContent(userID, summaryID, content string) error
+	DeleteSummary(userID, summaryID string) error
+	CheckUserExists(userID string) (bool, error)
 }
 
-// NewMongoSummaryRepository initializes the repository with MongoDB collections
-func NewMongoSummaryRepository(db *mongo.Database) (*MongoSummaryRepository, error) {
-	usersCollection := db.Collection("users")
-	summariesCollection := db.Collection("summaries")
-
-	// Create unique index on user_id in the users collection
-	if _, err := usersCollection.Indexes().CreateOne(context.Background(), mongo.IndexModel{
-		Keys:    bson.D{{Key: "user_id", Value: 1}},
-		Options: options.Index().SetUnique(true),
-	}); err != nil {
-		return nil, errors.New("failed to create index on users collection: " + err.Error())
-	}
-
-	// Create index on user_id and server_id in the summaries collection
-	if _, err := summariesCollection.Indexes().CreateOne(context.Background(), mongo.IndexModel{
-		Keys: bson.D{{Key: "user_id", Value: 1}, {Key: "server_id", Value: 1}},
-	}); err != nil {
-		return nil, errors.New("failed to create index on summaries collection: " + err.Error())
-	}
-
-	return &MongoSummaryRepository{
-		collection:     summariesCollection,
-		userCollection: usersCollection,
-	}, nil
+// dynamoDBSummaryRepository is the DynamoDB implementation of SummaryRepository.
+type dynamoDBSummaryRepository struct {
+	ddbClient          *dynamodb.Client
+	summariesTableName string
+	usersTableName     string
 }
 
-// AddSummary inserts a new summary into the summaries collection
-func (r *MongoSummaryRepository) AddSummary(summaryID, userID, serverID string, isPrivate bool, summaryContent, createdAt string) error {
+// NewSummaryRepository initializes the repository with a DynamoDB client.
+// Infrastructure tasks like creating tables and indexes should be done
+// outside of the application code (e.g., using CloudFormation, CDK, or Terraform).
+func NewSummaryRepository(client *dynamodb.Client) SummaryRepository {
+	return &dynamoDBSummaryRepository{
+		ddbClient:          client,
+		summariesTableName: "Summaries", // Manage via config
+		usersTableName:     "Users",     // Manage via config
+	}
+}
+
+// AddSummary uses PutItem to insert a new summary.
+func (r *dynamoDBSummaryRepository) AddSummary(summary models.SummaryItem) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	summary := bson.M{
-		"summary_id": summaryID,
-		"user_id":    userID,
-		"server_id":  serverID,
-		"is_private": isPrivate,
-		"summary":    summaryContent,
-		"created_at": createdAt,
-		"updated_at": createdAt,
+	item, err := attributevalue.MarshalMap(summary)
+	if err != nil {
+		return fmt.Errorf("failed to marshal summary: %w", err)
 	}
 
-	if _, err := r.collection.InsertOne(ctx, summary); err != nil {
-		return fmt.Errorf("failed to add summary: %w", err)
+	input := &dynamodb.PutItemInput{
+		TableName: aws.String(r.summariesTableName),
+		Item:      item,
+	}
+
+	_, err = r.ddbClient.PutItem(ctx, input)
+	if err != nil {
+		return fmt.Errorf("failed to add summary to dynamodb: %w", err)
 	}
 	return nil
 }
 
-// GetSummaries retrieves summaries matching the provided filter
-func (r *MongoSummaryRepository) GetSummaries(filter bson.M) ([]bson.M, error) {
+// GetSummariesByUserID queries the base table using the user_id partition key.
+func (r *dynamoDBSummaryRepository) GetSummariesByUserID(userID string) ([]models.SummaryItem, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cursor, err := r.collection.Find(ctx, filter)
+	keyEx := expression.Key("user_id").Equal(expression.Value(userID))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
 	if err != nil {
-		return nil, errors.New("failed to retrieve summaries: " + err.Error())
+		return nil, fmt.Errorf("failed to build query expression: %w", err)
 	}
-	defer cursor.Close(ctx)
 
-	var summaries []bson.M
-	if err := cursor.All(ctx, &summaries); err != nil {
-		return nil, errors.New("failed to decode summaries: " + err.Error())
+	input := &dynamodb.QueryInput{
+		TableName:                 aws.String(r.summariesTableName),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		KeyConditionExpression:    expr.KeyCondition(),
+	}
+
+	result, err := r.ddbClient.Query(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query summaries by user id: %w", err)
+	}
+
+	var summaries []models.SummaryItem
+	err = attributevalue.UnmarshalListOfMaps(result.Items, &summaries)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal summaries: %w", err)
 	}
 	return summaries, nil
 }
 
-// UpdateSummary modifies the summary content for the given filter
-func (r *MongoSummaryRepository) UpdateSummary(userID, serverID string, isPrivate bool, content string) error {
+// GetSummariesByUserIDAndServerID queries the GSI using user_id and server_id.
+func (r *dynamoDBSummaryRepository) GetSummariesByUserIDAndServerID(userID, serverID string) ([]models.SummaryItem, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	filter := bson.M{"user_id": userID, "server_id": serverID, "is_private": isPrivate}
-	update := bson.M{
-		"$set": bson.M{
-			"summary":    content,
-			"updated_at": time.Now(),
+	keyEx := expression.Key("user_id").Equal(expression.Value(userID)).
+		And(expression.Key("server_id").Equal(expression.Value(serverID)))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build GSI query expression: %w", err)
+	}
+
+	input := &dynamodb.QueryInput{
+		TableName:                 aws.String(r.summariesTableName),
+		IndexName:                 aws.String("UserServerIndex"), // Querying the GSI
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		KeyConditionExpression:    expr.KeyCondition(),
+	}
+
+	result, err := r.ddbClient.Query(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to GSI query summaries: %w", err)
+	}
+
+	var summaries []models.SummaryItem
+	err = attributevalue.UnmarshalListOfMaps(result.Items, &summaries)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal GSI summaries: %w", err)
+	}
+	return summaries, nil
+}
+
+// UpdateSummaryContent uses UpdateItem to modify a specific summary.
+// Note: This requires both user_id and summary_id to uniquely identify the item.
+// The handler will need to fetch the summary first to get its summary_id if it doesn't have it.
+func (r *dynamoDBSummaryRepository) UpdateSummaryContent(userID, summaryID, content string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	key := map[string]types.AttributeValue{
+		"user_id":    &types.AttributeValueMemberS{Value: userID},
+		"summary_id": &types.AttributeValueMemberS{Value: summaryID},
+	}
+
+	update := expression.Set(expression.Name("summary"), expression.Value(content)).
+		Set(expression.Name("updated_at"), expression.Value(time.Now().UTC().Format(time.RFC3339)))
+	expr, err := expression.NewBuilder().WithUpdate(update).Build()
+	if err != nil {
+		return fmt.Errorf("failed to build update expression: %w", err)
+	}
+
+	input := &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(r.summariesTableName),
+		Key:                       key,
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ConditionExpression:       aws.String("attribute_exists(user_id)"), // Ensures we don't create an item
+	}
+
+	_, err = r.ddbClient.UpdateItem(ctx, input)
+	if err != nil {
+		if _, ok := err.(*types.ConditionalCheckFailedException); ok {
+			return errors.New("no matching summary found")
+		}
+		return fmt.Errorf("failed to update summary: %w", err)
+	}
+	return nil
+}
+
+// DeleteSummary uses DeleteItem with the full primary key.
+func (r *dynamoDBSummaryRepository) DeleteSummary(userID, summaryID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	key := map[string]types.AttributeValue{
+		"user_id":    &types.AttributeValueMemberS{Value: userID},
+		"summary_id": &types.AttributeValueMemberS{Value: summaryID},
+	}
+
+	input := &dynamodb.DeleteItemInput{
+		TableName:           aws.String(r.summariesTableName),
+		Key:                 key,
+		ConditionExpression: aws.String("attribute_exists(user_id)"), // Ensures it exists before deleting
+	}
+
+	_, err := r.ddbClient.DeleteItem(ctx, input)
+	if err != nil {
+		if _, ok := err.(*types.ConditionalCheckFailedException); ok {
+			return errors.New("no matching summary found")
+		}
+		return fmt.Errorf("failed to delete summary: %w", err)
+	}
+	return nil
+}
+
+// CheckUserExists uses GetItem on the Users table.
+func (r *dynamoDBSummaryRepository) CheckUserExists(userID string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	input := &dynamodb.GetItemInput{
+		TableName: aws.String(r.usersTableName),
+		Key: map[string]types.AttributeValue{
+			"id": &types.AttributeValueMemberS{Value: userID},
 		},
 	}
 
-	result, err := r.collection.UpdateOne(ctx, filter, update)
+	result, err := r.ddbClient.GetItem(ctx, input)
 	if err != nil {
-		return errors.New("failed to update summary: " + err.Error())
+		return false, err
 	}
-	if result.MatchedCount == 0 {
-		return errors.New("no matching summary found")
-	}
-	return nil
-}
-
-func (r *MongoSummaryRepository) DeleteSummary(userID, summaryID string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	filter := bson.M{
-		"user_id":    userID,
-		"summary_id": summaryID,
-	}
-
-	result, err := r.collection.DeleteOne(ctx, filter)
-	if err != nil {
-		return fmt.Errorf("failed to delete summary: %w", err)
-	}
-
-	if result.DeletedCount == 0 {
-		return errors.New("no matching summary found")
-	}
-	return nil
-}
-
-func (r *MongoSummaryRepository) CheckUserExists(userID string) (bool, error) {
-	filter := bson.M{"id": userID} // Use "id" field instead of "_id"
-	var result bson.M
-	err := r.userCollection.FindOne(context.Background(), filter).Decode(&result)
-	if err != nil {
-		if err == mongo.ErrNoDocuments {
-			return false, nil // User not found
-		}
-		return false, err // Other errors
-	}
-	return true, nil
+	// If result.Item is not nil, the user exists.
+	return result.Item != nil, nil
 }

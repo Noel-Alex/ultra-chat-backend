@@ -1,0 +1,30 @@
+.env
+
+# Binaries for programs and plugins
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binaries
+*_test
+
+# Dependency directories
+vendor/
+go.mod
+go.sum
+
+# Go build cache
+.cache/go-build/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+tmp/

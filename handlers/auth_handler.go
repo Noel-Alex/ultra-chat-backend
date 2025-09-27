@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
-	"go.mongodb.org/mongo-driver/bson"
 	"net/http"
 	"os"
 	"ultra-chat-backend/models"
@@ -20,6 +19,7 @@ func NewAuthHandler(repo repositories.UserRepository) *AuthHandler {
 	return &AuthHandler{repo: repo}
 }
 
+// Login method remains unchanged as it has no database interaction.
 func (h *AuthHandler) Login(c echo.Context) error {
 	clientID := os.Getenv("CLIENT_ID")
 	redirectURI := os.Getenv("REDIRECT_URI")
@@ -57,19 +57,22 @@ func (h *AuthHandler) Callback(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Invalid user ID"})
 	}
 
-	userUUID := uuid.New().String()
 	existingUser, _ := h.repo.FindUserByID(userID)
 
 	if existingUser != nil {
-		update := bson.M{
+		// CHANGED: We replaced `bson.M` with a generic `map[string]interface{}`.
+		// This decouples the handler from the database implementation. The repository
+		// will be responsible for translating this map into a DynamoDB update expression.
+		updateData := map[string]interface{}{
 			"token":         tokens,
 			"username":      userInfo["username"],
 			"discriminator": userInfo["discriminator"],
 		}
-		if err := h.repo.UpdateUser(userID, update); err != nil {
+		if err := h.repo.UpdateUser(userID, updateData); err != nil {
 			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 	} else {
+		userUUID := uuid.New().String()
 		newUser := &models.User{
 			ID:            userID,
 			UUID:          userUUID,
@@ -85,6 +88,7 @@ func (h *AuthHandler) Callback(c echo.Context) error {
 	return c.JSON(http.StatusOK, "Successfully Authenticated")
 }
 
+// Profile method remains unchanged as it has no database interaction.
 func (h *AuthHandler) Profile(c echo.Context) error {
 	// Get the token from the Authorization header
 	token := c.Request().Header.Get("Authorization")
